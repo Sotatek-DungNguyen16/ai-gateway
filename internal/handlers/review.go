@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Sotatek-DungNguyen16/ai-review-gateway/internal/config"
@@ -39,47 +40,66 @@ func (h *ReviewHandler) HandleReview(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	log.Printf("Received review request - Content-Type: %s, Content-Length: %d", contentType, r.ContentLength)
 
-	// Parse multipart form with better error handling
-	if err := r.ParseMultipartForm(h.config.MaxDiffSize); err != nil {
-		log.Printf("Error parsing multipart form: %v", err)
-		log.Printf("Content-Type: %s", r.Header.Get("Content-Type"))
-		log.Printf("Request headers: %+v", r.Header)
-		http.Error(w, fmt.Sprintf(`{"error":"Failed to parse form: %v"}`, err), http.StatusBadRequest)
-		return
-	}
-
-	// Get metadata
-	metadataStr := r.FormValue("metadata")
-	if metadataStr == "" {
-		http.Error(w, `{"error":"Missing metadata field"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Parse metadata JSON
 	var request models.ReviewRequest
-	if err := json.Unmarshal([]byte(metadataStr), &request); err != nil {
-		log.Printf("Error parsing metadata JSON: %v", err)
-		http.Error(w, fmt.Sprintf(`{"error":"Invalid metadata JSON: %v"}`, err), http.StatusBadRequest)
-		return
-	}
 
-	// Get git_diff file
-	file, _, err := r.FormFile("git_diff")
-	if err != nil {
-		log.Printf("Error reading git_diff file: %v", err)
-		http.Error(w, fmt.Sprintf(`{"error":"Missing or invalid git_diff file: %v"}`, err), http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+	// Handle both JSON and multipart/form-data
+	if strings.Contains(contentType, "application/json") {
+		// Handle JSON request (from GitHub Actions)
+		log.Printf("Processing as JSON request")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("Error reading request body: %v", err)
+			http.Error(w, `{"error":"Failed to read request body"}`, http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
 
-	// Read diff content
-	diffBytes, err := io.ReadAll(file)
-	if err != nil {
-		log.Printf("Error reading diff content: %v", err)
-		http.Error(w, `{"error":"Failed to read diff content"}`, http.StatusInternalServerError)
-		return
+		if err := json.Unmarshal(body, &request); err != nil {
+			log.Printf("Error parsing JSON: %v", err)
+			http.Error(w, fmt.Sprintf(`{"error":"Invalid JSON: %v"}`, err), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// Handle multipart/form-data request (from local/curl)
+		log.Printf("Processing as multipart/form-data request")
+		if err := r.ParseMultipartForm(h.config.MaxDiffSize); err != nil {
+			log.Printf("Error parsing multipart form: %v", err)
+			http.Error(w, fmt.Sprintf(`{"error":"Failed to parse form: %v"}`, err), http.StatusBadRequest)
+			return
+		}
+
+		// Get metadata
+		metadataStr := r.FormValue("metadata")
+		if metadataStr == "" {
+			http.Error(w, `{"error":"Missing metadata field"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Parse metadata JSON
+		if err := json.Unmarshal([]byte(metadataStr), &request); err != nil {
+			log.Printf("Error parsing metadata JSON: %v", err)
+			http.Error(w, fmt.Sprintf(`{"error":"Invalid metadata JSON: %v"}`, err), http.StatusBadRequest)
+			return
+		}
+
+		// Get git_diff file
+		file, _, err := r.FormFile("git_diff")
+		if err != nil {
+			log.Printf("Error reading git_diff file: %v", err)
+			http.Error(w, fmt.Sprintf(`{"error":"Missing or invalid git_diff file: %v"}`, err), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		// Read diff content
+		diffBytes, err := io.ReadAll(file)
+		if err != nil {
+			log.Printf("Error reading diff content: %v", err)
+			http.Error(w, `{"error":"Failed to read diff content"}`, http.StatusInternalServerError)
+			return
+		}
+		request.GitDiff = string(diffBytes)
 	}
-	request.GitDiff = string(diffBytes)
 
 	// Validate request
 	if request.GitDiff == "" {
@@ -133,7 +153,7 @@ func (h *ReviewHandler) HandleReview(w http.ResponseWriter, r *http.Request) {
 	// Send response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding response: %v", err)
 	}
