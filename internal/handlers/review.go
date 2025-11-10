@@ -35,9 +35,15 @@ func (h *ReviewHandler) HandleReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form
+	// Log request details for debugging
+	contentType := r.Header.Get("Content-Type")
+	log.Printf("Received review request - Content-Type: %s, Content-Length: %d", contentType, r.ContentLength)
+
+	// Parse multipart form with better error handling
 	if err := r.ParseMultipartForm(h.config.MaxDiffSize); err != nil {
 		log.Printf("Error parsing multipart form: %v", err)
+		log.Printf("Content-Type: %s", r.Header.Get("Content-Type"))
+		log.Printf("Request headers: %+v", r.Header)
 		http.Error(w, fmt.Sprintf(`{"error":"Failed to parse form: %v"}`, err), http.StatusBadRequest)
 		return
 	}
